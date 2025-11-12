@@ -32,6 +32,105 @@ const client = new MongoClient(uri, {
   },
 });
 
+// app.post("/resume-match", upload.single("resume"), async (req, res) => {
+//   try {
+//     const file = req.file;
+//     const jobDescriptionRaw = req.body.jobDescription;
+//     console.log("Job Description:", jobDescriptionRaw);
+
+//     if (!file) return res.status(400).send("No PDF uploaded!");
+//     if (!jobDescriptionRaw)
+//       return res.status(400).send("No job description provided!");
+
+//     // Initialize pdf.js-extract
+//     const pdfExtract = new PDFExtract();
+//     const options = {}; // default options
+
+//     // Extract PDF text
+//     pdfExtract.extract(file.path, options, async (err, data) => {
+//       if (err) {
+//         console.error(err);
+//         return res.status(500).send("Error parsing PDF");
+//       }
+
+//       // Combine text from all pages
+//       const resumeTextRaw = data.pages
+//         .map((page) => page.content.map((c) => c.str).join(" "))
+//         .join("\n\n");
+
+//       console.log("Resume Text:", resumeTextRaw);
+//       fs.unlink(file.path, (err) => {
+//         if (err) {
+//           console.error("Failed to delete file:", err);
+//         } else {
+//           console.log("Uploaded file deleted successfully");
+//         }
+//       });
+
+//       const resumeText = preprocess(resumeTextRaw);
+//       const jobDescription = preprocess(jobDescriptionRaw);
+
+//       const similarityScore = await computeSimilarity(
+//         resumeText,
+//         jobDescription
+//       );
+
+//       res.json({
+//         similarityScore,
+//         percentage: (similarityScore * 100).toFixed(2) + "%",
+//         resumeText,
+//         jobDescription,
+//       });
+//     });
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).send("Server error");
+//   }
+// });
+
+// app.get("/prompts", async (req, res) => {
+//   try {
+//     const response = await ai.models.generateContent({
+//       model: "gemini-2.0-flash",
+//       contents: "What is AI in 1 line?",
+//     });
+//     //   console.log(response?.text);
+//     //   return response?.text;
+//     const text = response?.text || "No response text.";
+//     console.log("Gemini response:", text);
+//     res.send({ text });
+//   } catch (err) {
+//     console.error("Error in /prompts:", err);
+//     res.status(500).send({ message: "Failed to fetch response from AI" });
+//   }
+// });
+
+async function queryHuggingFace(prompt) {
+  const response = await fetch(
+  "https://router.huggingface.co/v1/chat/completions",
+  {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.CAREERCRAFT_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-oss-120b:fastest",
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    }),
+  }
+);
+const data = await response.json();
+console.log(data?.choices[0].message?.content);
+
+  if (data.error) throw new Error(data.error);
+  return data?.choices[0]?.message?.content || "No response received from model.";
+}
 app.post("/resume-match", upload.single("resume"), async (req, res) => {
   try {
     const file = req.file;
@@ -58,7 +157,7 @@ app.post("/resume-match", upload.single("resume"), async (req, res) => {
         .map((page) => page.content.map((c) => c.str).join(" "))
         .join("\n\n");
 
-      console.log("Resume Text:", resumeTextRaw);
+      // Clean up uploaded file
       fs.unlink(file.path, (err) => {
         if (err) {
           console.error("Failed to delete file:", err);
@@ -67,41 +166,58 @@ app.post("/resume-match", upload.single("resume"), async (req, res) => {
         }
       });
 
+      // --- Preprocessing ---
       const resumeText = preprocess(resumeTextRaw);
       const jobDescription = preprocess(jobDescriptionRaw);
 
+      // --- Compute similarity ---
       const similarityScore = await computeSimilarity(
         resumeText,
         jobDescription
       );
 
-      res.json({
-        similarityScore,
-        percentage: (similarityScore * 100).toFixed(2) + "%",
-        resumeText,
-        jobDescription,
-      });
+      // --- Prepare prompt for AI ---
+      const aiPrompt = `
+You are an expert career advisor and resume coach.
+
+Here is a job description:
+${jobDescription}
+
+Here is the candidate's resume text:
+${resumeText}
+
+The similarity score between the resume and the job description is ${(
+        similarityScore * 100
+      ).toFixed(2)}%.
+
+Based on the comparison:
+1. Suggest the top  3 skills or technologies the candidate should learn to better fit this job. No extra text shpuld be provided. Just skill names.
+      `;
+
+         try {
+        const aiAdvice = await queryHuggingFace(aiPrompt);
+
+        res.json({
+          similarityScore,
+          percentage: (similarityScore * 100).toFixed(2) + "%",
+          resumeText,
+          jobDescription,
+          aiAdvice,
+        });
+      } catch (aiError) {
+        console.error("AI error:", aiError);
+        res.json({
+          similarityScore,
+          percentage: (similarityScore * 100).toFixed(2) + "%",
+          resumeText,
+          jobDescription,
+          aiAdvice: "AI analysis failed.",
+        });
+      }
     });
   } catch (err) {
     console.error(err);
     res.status(500).send("Server error");
-  }
-});
-
-app.get("/prompts", async (req, res) => {
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: "What is AI in 1 line?",
-    });
-    //   console.log(response?.text);
-    //   return response?.text;
-    const text = response?.text || "No response text.";
-    console.log("Gemini response:", text);
-    res.send({ text });
-  } catch (err) {
-    console.error("Error in /prompts:", err);
-    res.status(500).send({ message: "Failed to fetch response from AI" });
   }
 });
 
